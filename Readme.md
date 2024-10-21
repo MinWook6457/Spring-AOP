@@ -210,4 +210,132 @@ public class SpringAopApplication {
 
 ```
 
+### 커스텀 어노테이션 생성 과 AOP
+리플렉션까지 맛을 봤으니 나만의 어노테이션을 생성하고 AOP를 주입해보자.
+
+```java
+package com.minwook.springaop.annotation;
+
+
+import java.lang.annotation.*;
+
+// 어노테이션은 메서드에 적용되고 런타임까지 유지됨
+@Documented
+@Retention(RetentionPolicy.RUNTIME)
+public @interface AnnotationTest {
+    //
+}
+```
+* Documented : JavaDoc 같은 문서화 도구에 포함되도록 함, @Documented가 없으면 어노테이션 자체는 코드에 적용되지만, 문서화할 때는 표시되지 않는다.
+* Retention : 어노테이션의 생명 주기 결정
+  * SOURCE : 컴파일 단계까지만 어노테이션이 유지
+  * CLASS : 컴파일된 .class 파일에는 포함되지만, 런타임 시에는 JVM에 의해 읽을 수 없다: 기본값
+  * RUNTIME : 어노테이션이 컴파일된 .class 파일에 포함되며, 런타임에도 JVM에 의해 유지되고 반영
+    * 리플렉션을 사용하여 어노테이션 정보를 런타임에 접근할 수 있음
+
+어노테이션을 생성하고 나서 로킹 클래스를 정의할 것이다.
+
+### 그전에 AOP에 정확히 뭔지 알아보자 (공식문서 발췌)
+```
+스프링의 AOP(Aspect Oriented Programming)
+
+AOP(관점 지향 프로그래밍)는 OOP(객체 지향 프로그래밍)를 보완하며 프로그램 구조를 생각하는 또 다른 방법을 제공합니다. 
+
+OOP에서 핵심적인 모듈 단위는 클래스인 반면, AOP에서는 모듈 단위가 관점(aspect)입니다.
+ 
+관점은 여러 타입과 객체에 걸쳐 공통으로 적용되는 관심사(예: 트랜잭션 관리)를 모듈화할 수 있게 해줍니다. (이러한 관심사를 AOP 문헌에서는 "횡단 관심사"라고 부릅니다.)
+
+스프링의 핵심 구성 요소 중 하나가 바로 AOP 프레임워크입니다. 
+
+스프링 IoC 컨테이너는 AOP에 의존하지 않기 때문에, AOP를 사용하지 않아도 스프링을 사용할 수 있습니다. 
+
+하지만 AOP는 스프링 IoC를 보완하여 매우 강력한 미들웨어 솔루션을 제공합니다.
+```
+
+스프링에서는 어노테이션을 통해 AOP 구현을 쉽게 할 수 있도록 해준다. 
+
+```java
+package com.minwook.springaop.aop;
+
+import org.aspectj.lang.ProceedingJoinPoint;
+import org.aspectj.lang.annotation.Around;
+import org.aspectj.lang.annotation.Aspect;
+import org.springframework.stereotype.Component;
+
+@Aspect
+@Component
+public class LoggingAspect {
+    // LogExecutionTime 어노테이션이 붙은 메서드에 대해 AOP 처리
+    @Around("@annotation(com.minwook.springaop.annotation.AnnotationTest)")
+    public Object logExecutionTime(ProceedingJoinPoint joinPoint) throws Throwable {
+        long start = System.currentTimeMillis();
+
+        Object proceed = joinPoint.proceed(); // 실제 메서드 실행
+
+        long executionTime = System.currentTimeMillis() - start;
+
+        System.out.println(joinPoint.getSignature() + " executed in " + executionTime + "ms");
+        return proceed;
+    }
+}
+```
+
+위 코드를 단계 별로 분석해보자.
+
+#### Aspect && Component
+* @Aspect: 이 클래스가 AOP에서 사용할 Aspect임을 나타낸다.  Aspect는 공통 관심사를 모듈화하여 특정 타겟 메서드에 적용하는 역할을 한다.
+* @Component: 해당 클래스를 Spring 빈으로 등록
+
+* @Around 어노테이션 
+  * @Around: AOP에서 타겟 메서드가 호출되기 전후로 특정 로직을 실행할 수 있게 한다 
+  * @Around는 메서드 실행의 시작과 끝을 감싸서 실행되므로, 메서드의 실행 전과 후에 각각 로직을 추가할 수 있다.
+  * @annotation(com.minwook.springaop.annotation.AnnotationTest)
+    * @AnnotationTest라는 어노테이션이 붙은 메서드들에 대해 logExecutionTime 메서드를 적용하겠다는 의미이다.
+    * 즉, @AnnotationTest 어노테이션이 선언된 메서드에 대해서만 이 AOP 로직이 실행된다.
+
+#### ProceedingJoinPoint && 메서드
+* ProceedingJoinPoint: AOP에서 현재 실행되는 메서드에 대한 정보(메서드 이름, 매개변수, 대상 객체 등)를 제공하는 객체이다.  proceed() 메서드를 호출하면 실제 타겟 메서드가 실행된다.
+* long start = System.currentTimeMillis(); : 메서드 실행이 시작되기 직전의 시간을 기록한다.
+* Object proceed = joinPoint.proceed(); : 타겟 메서드를 실행하고 이때 타겟 메서드의 반환 값을 proceed에 저장한다.
+* return proceed; : 타겟 메서드 값 반환, 해당 부분이 없다면 타겟 메서드의 반환값이 호출자에게 전달되지 않기 때문에 반드시 거쳐야 하는 작업이다.
+
+이를 테스트하기 위해 메인 클래스를 다음과 같이 정의하였다.
+```java
+@SpringBootApplication(exclude = {DataSourceAutoConfiguration.class}) // JDBC 자동 설정 제외
+public class SpringAopApplication {
+
+    public static void main(String[] args)  {
+        SpringApplication.run(SpringAopApplication.class, args); // Spring 애플리케이션 실행
+    }
+
+    @Bean
+    CommandLineRunner run(AopService aopService) {
+        return args -> {
+            try {
+                aopService.executeTest();  // AOP가 적용된 메서드 호출
+            } catch (InterruptedException e) {
+                e.printStackTrace();
+            }
+        };
+    }
+
+}
+```
+
+어플리케이션을 실행하고 나서 결과는 아래와 같다.
+```
+Executing test method...
+void com.minwook.springaop.aop.service.AopService.executeTest() executed in 1007ms
+```
+
+### AOP에서 사용되는 용어 파악하기
+* Aspect : 공통 관심사(Cross-cutting corncern)을 모듈화 한 것
+* Target : Aspect(공통관심사)를 적용할 핵심로직을 가진 객체
+* Weaving - Aspect 를 대상 객체(Target)에 연결시켜 AOP 객체로 만드는 바이트 코드 및 객체 조작과정
+
+* Advice : Aspect(공통관심사)의 동작을 적은 것. Aspect의 구현체 (객체의 메서드조작)
+  * Join Point : Advice가 적용되는 시점. (메서드 실행, 생성자 호출, 필드 값 변경같은 특수한 실행 시점)    
+    * return joinPoint.proceed();
+  * Pointcut : [Join Point]의 정규식 => 실행 스펙, Pointcut이 일치하는 객체들에게 Aspect 적용(조건문)
+    * @Pointcut("execution(* hello(..))") 
 
