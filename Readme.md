@@ -85,7 +85,7 @@ Class<T>에는 getAnnotation() 이라는 메소드가 존재한다. 해당 메�
 다시 말해, 자바 코드와 바이트코드까지는 남아있지만 해당 바이트코드가 읽혀진 후 런타임 메모리에는 어노테이션에 대한 그 어떠한 정보도 남아있지 않는다.
 
 다만 자바에서는 코드에서 리플렉션을 사용할 수 있도록 어노테이션을 정의할 때 생명주기를 런타임까지 남아있도록 설정할 수 있다. 만약 Class.getAnnotation()을 사용하고 싶다면 아뢔와 같이 어노테이션을 생성한다.
-```
+```java
 import java.lang.annation.*;
  
 @Documented
@@ -94,6 +94,120 @@ import java.lang.annation.*;
 public @interface FunctionalInterface{...}
 ```
 
+### 리플렉션 API - 인스턴스 생성, 클래스 수정
 
+스프링 부트 메인 클래스에서 테스트 하기위해 아래와 같이 코드를 작성해보았다.
+```java
+package com.minwook.springaop;
+
+import org.springframework.boot.SpringApplication;
+import org.springframework.boot.autoconfigure.SpringBootApplication;
+import org.springframework.boot.autoconfigure.jdbc.DataSourceAutoConfiguration;
+
+import java.lang.reflect.Constructor;
+import java.lang.reflect.Field;
+import java.lang.reflect.InvocationTargetException;
+
+import com.minwook.springaop.user.User;
+
+@SpringBootApplication(exclude = {DataSourceAutoConfiguration.class}) // JDBC 자동 설정 제외
+public class SpringAopApplication {
+
+    public static void main(String[] args) throws
+            ClassNotFoundException,
+            InvocationTargetException,
+            InstantiationException,
+            IllegalAccessException,
+            NoSuchMethodException,
+            NoSuchFieldException {
+
+        // User 클래스를 동적으로 로드
+        Class<User> userClass = (Class<User>) Class.forName("com.minwook.springaop.user.User");
+
+        // 문자열 3개를 받는 생성자를 가져옴
+        Constructor<User> constructor = userClass.getConstructor(String.class, String.class, String.class);
+        // 생성자를 사용해 새로운 User 객체를 생성 (매개변수 전달)
+        User user = constructor.newInstance("생성자에 매개변수 문자열값", "name", "1234");
+
+        // 'name' 필드를 가져옴
+        Field nameField = User.class.getDeclaredField("name");
+        nameField.setAccessible(true); // 접근 제어자를 무시하고 필드에 접근 가능하게 설정
+
+        // static 필드일 경우
+        String classMember = (String) nameField.get(null); // static 필드 값을 가져옴
+
+        // 인스턴스 필드일 경우, 생성한 'user' 인스턴스를 사용하여 값 가져오기
+        String name = (String) nameField.get(user); // 'user' 인스턴스에서 'name' 값 가져오기
+
+        SpringApplication.run(SpringAopApplication.class, args); // Spring 애플리케이션 실행
+    }
+}
+
+```
+
+그 결과 아래와 같은 이슈가 발생하였다.
+```md
+Exception in thread "main" java.lang.NullPointerException: Cannot invoke "Object.getClass()" because "o" is null
+	at java.base/jdk.internal.reflect.UnsafeFieldAccessorImpl.ensureObj(UnsafeFieldAccessorImpl.java:57)
+	at java.base/jdk.internal.reflect.UnsafeObjectFieldAccessorImpl.get(UnsafeObjectFieldAccessorImpl.java:36)
+```
+
+NullPointerException 발생 원인은 UnsafeFieldAccessorImpl에서 Object.getClass()를 호출하려고 할 때, 해당 객체(o)가 null인 경우이다.
+이 문제는 반사(reflection)로 필드에 접근할 때 객체가 null이어서 발생한다.
+
+#### 아래 코드에서 발생
+```java
+String classMember = (String) nameField.get(null); // static 필드 값 가져옴
+
+```
+nameField.get(null)이 null인 이유는 name 필드가 static 필드가 아니기 때문이다. get(null)은 static 필드에만 적용된다. 그러나 name 필드는 User 인스턴스의 필드이므로, 인스턴스에서 값을 가져와야 한다.
+
+#### 해결 방법
+name 필드가 static이 아닌 인스턴스 필드이므로, 아래처럼 인스턴스(user)에서 필드 값을 가져와야 한다.
+
+```java
+package com.minwook.springaop;
+
+import org.springframework.boot.SpringApplication;
+import org.springframework.boot.autoconfigure.SpringBootApplication;
+import org.springframework.boot.autoconfigure.jdbc.DataSourceAutoConfiguration;
+
+import java.lang.reflect.Constructor;
+import java.lang.reflect.Field;
+import java.lang.reflect.InvocationTargetException;
+
+import com.minwook.springaop.user.User;
+
+@SpringBootApplication(exclude = {DataSourceAutoConfiguration.class}) // JDBC 자동 설정 제외
+public class SpringAopApplication {
+
+    public static void main(String[] args) throws
+            ClassNotFoundException,
+            InvocationTargetException,
+            InstantiationException,
+            IllegalAccessException,
+            NoSuchMethodException,
+            NoSuchFieldException {
+
+        // User 클래스를 동적으로 로드
+        Class<User> userClass = (Class<User>) Class.forName("com.minwook.springaop.user.User");
+
+        // 문자열 3개를 받는 생성자를 가져옴
+        Constructor<User> constructor = userClass.getConstructor(String.class, String.class, String.class);
+        // 생성자를 사용해 새로운 User 객체를 생성 (매개변수 전달)
+        User user = constructor.newInstance("생성자에 매개변수 문자열값", "name", "1234");
+
+        // 'name' 필드를 가져옴
+        Field nameField = User.class.getDeclaredField("name");
+        nameField.setAccessible(true); // 접근 제어자를 무시하고 필드에 접근 가능하게 설정
+
+        // 인스턴스 필드일 경우, 생성한 'user' 인스턴스를 사용하여 값 가져오기
+        String name = (String) nameField.get(user); // 'user' 인스턴스에서 'name' 값 가져오기
+
+        SpringApplication.run(SpringAopApplication.class, args); // Spring 애플리케이션 실행
+    }
+}
+
+```
 
 
